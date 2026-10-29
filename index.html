@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Угадай число</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#1e2230;color:#eef;font-family:system-ui,sans-serif}
+  .card{width:min(420px,94vw);min-height:420px;background:#2a3042;border-radius:16px;padding:24px;display:flex;flex-direction:column;gap:14px}
+  h1,h2{margin:0;text-align:center}
+  input{padding:12px;border-radius:8px;border:1px solid #556;background:#1e2230;color:#eef;font-size:16px;width:100%}
+  button{padding:12px;border:0;border-radius:8px;background:#5b7cfa;color:#fff;font-size:16px;cursor:pointer}
+  button.sec{background:#454d68}
+  ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;flex:1}
+  li{padding:12px;border-radius:8px;background:#1e2230;display:flex;justify-content:space-between;user-select:none}
+  li.sel{outline:2px solid #5b7cfa}
+  .foot{display:flex;justify-content:space-between;align-items:center;margin-top:auto}
+  .foot span{font-size:20px;font-weight:bold}
+  .row{display:flex;gap:8px}.row button{white-space:nowrap}
+  .hint{font-size:34px;text-align:center;font-weight:bold;min-height:48px}
+  .muted{color:#99a;text-align:center}
+  .big{font-size:28px;text-align:center;font-weight:bold}
+  .win{color:#6be28a}.lose{color:#ff7b7b}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="card">
+
+  <section id="home" class="col" style="display:flex;flex-direction:column;gap:14px">
+    <h1>Угадай число</h1>
+    <input id="nick" placeholder="Ваше имя" maxlength="20">
+    <button id="bCreate">Создать лобби</button>
+    <button id="bJoin">Присоединиться</button>
+  </section>
+
+  <section id="create" hidden style="display:flex;flex-direction:column;gap:14px">
+    <h2>Новое лобби</h2>
+    <input id="lname" placeholder="Название лобби" maxlength="30">
+    <button id="bOk">Подтвердить</button>
+    <button class="sec" id="bBack1">Назад</button>
+  </section>
+
+  <section id="join" hidden style="display:flex;flex-direction:column;gap:14px;flex:1">
+    <h2>Доступные лобби</h2>
+    <p class="muted" style="margin:0">Двойное нажатие — войти</p>
+    <ul id="llist"></ul>
+    <button class="sec" id="bBack2">Назад</button>
+  </section>
+
+  <section id="wait" hidden style="display:flex;flex-direction:column;gap:14px;flex:1">
+    <h2 id="wname"></h2>
+    <ul id="plist"></ul>
+    <div class="foot"><button class="sec" id="bLeave">Выйти</button><span id="cnt">1/4</span></div>
+  </section>
+
+  <section id="game" hidden style="display:flex;flex-direction:column;gap:14px;flex:1">
+    <div class="muted" id="role"></div>
+    <div class="big" id="status"></div>
+    <div class="row" id="inRow"><input id="num" type="number" min="0" max="100" placeholder="0–100"><button id="bAct"></button></div>
+    <div class="hint" id="hint"></div>
+    <div class="muted" id="left"></div>
+    <ul id="hist" style="overflow:auto;max-height:140px"></ul>
+    <button id="bMenu" hidden>В меню</button>
+  </section>
+
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const pid = sessionStorage.pid || (sessionStorage.pid = Math.random().toString(36).slice(2) + Date.now().toString(36));
+let lobbies = [], selected = null, lastT = 0, view = null, screen = 'home';
+
+function show(id) {
+  screen = id;
+  for (const s of ['home','create','join','wait','game']) $('#' + s).hidden = s !== id;
+}
+async function post(url, body) {
+  try {
+    const r = await (await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({pid, nick:$('#nick').value, ...body})})).json();
+    if (r.error) alert(r.error);
+    return r;
+  } catch { alert('Нет связи с сервером'); }
+}
+
+const es = new EventSource('/events?pid=' + pid);
+es.onmessage = e => {
+  const m = JSON.parse(e.data);
+  if (m.type === 'lobbies') { lobbies = m.data; if (!view) renderList(); }
+  if (m.type === 'lobby') { view = m.data; renderLobby(); }
+};
+
+function renderList() {
+  $('#llist').innerHTML = lobbies.length
+    ? lobbies.map(l => `<li data-id="${l.id}" class="${l.id===selected?'sel':''}"><b>${esc(l.name)}</b><span>${l.count}/4</span></li>`).join('')
+    : '<p class="muted">Пока нет доступных лобби</p>';
+}
+
+function renderLobby() {
+  const v = view;
+  if (v.phase === 'waiting') {
+    show('wait');
+    $('#wname').textContent = v.name;
+    $('#plist').innerHTML = v.players.map(p => `<li>${esc(p)}</li>`).join('');
+    $('#cnt').textContent = v.count + '/' + v.max;
+    return;
+  }
+  show('game');
+  const end = ['win','lose','abort'].includes(v.phase);
+  $('#role').textContent = v.isX ? 'Вы загадываете число (X)' : 'Вы угадываете (Y). Загадывает: ' + v.xName;
+  const canAct = !end && ((v.phase === 'choosing' && v.isX) || (v.phase === 'guessing' && v.myTurn));
+  $('#inRow').hidden = !canAct;
+  $('#bAct').textContent = v.phase === 'choosing' ? 'Загадать' : 'Отправить';
+  if (canAct) { $('#num').value = ''; $('#num').focus(); }
+
+  let st = '', cls = '';
+  if (v.phase === 'choosing') st = v.isX ? 'Загадайте число от 0 до 100' : v.xName + ' загадывает число…';
+  else if (v.phase === 'guessing') st = v.myTurn ? 'Ваш ход!' : 'Ходит: ' + v.turnName;
+  else if (v.phase === 'win') { st = `Победа! ${v.winner} угадал число ${v.secret}`; cls = 'win'; }
+  else if (v.phase === 'lose') { st = `Проигрыш! Было загадано: ${v.secret}`; cls = 'lose'; }
+  else { st = 'Игра прервана: ' + v.msg; cls = 'lose'; }
+  $('#status').className = 'big ' + cls;
+  $('#status').textContent = st;
+
+  const last = v.history[v.history.length - 1];
+  $('#hint').textContent = last && last.hint !== 'угадал' ? `${last.num} → ${last.hint}` : '';
+  $('#left').textContent = v.phase === 'guessing' && !v.isX ? `Ваших попыток: ${v.left}` :
+    (v.isX && v.secret != null && !end ? 'Ваше число: ' + v.secret : '');
+  $('#hist').innerHTML = v.history.map(h => `<li><span>${esc(h.name)}: ${h.num}</span><span>${h.hint}</span></li>`).join('');
+  $('#bMenu').hidden = !end;
+}
+
+function needNick() { if (!$('#nick').value.trim()) { alert('Введите имя'); return true; } }
+$('#bCreate').onclick = () => { if (!needNick()) show('create'); };
+$('#bJoin').onclick = () => { if (!needNick()) { selected = null; renderList(); show('join'); } };
+$('#bBack1').onclick = $('#bBack2').onclick = () => show('home');
+$('#bOk').onclick = () => post('/api/create', {lobby:$('#lname').value});
+$('#bLeave').onclick = $('#bMenu').onclick = async () => { view = null; await post('/api/leave', {}); show('home'); };
+$('#bAct').onclick = () => {
+  const n = $('#num').value.trim();
+  if (n === '' ) return;
+  post(view.phase === 'choosing' ? '/api/secret' : '/api/guess', {number: Number(n)});
+};
+$('#num').onkeydown = e => { if (e.key === 'Enter') $('#bAct').click(); };
+
+// двойное нажатие по лобби (работает и на телефоне)
+$('#llist').onclick = e => {
+  const li = e.target.closest('li[data-id]');
+  if (!li) return;
+  const now = Date.now(), id = li.dataset.id;
+  if (id === selected && now - lastT < 500) post('/api/join', {lobbyId:id});
+  selected = id; lastT = now; renderList();
+};
+</script>
+</body>
+</html>

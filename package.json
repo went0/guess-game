@@ -1,0 +1,12 @@
+{
+  "name": "guess-game",
+  "version": "1.0.0",
+  "description": "Игра «Угадай число» на 4 игрока",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=14"
+  }
+}
